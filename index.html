@@ -69,6 +69,8 @@
       <video id="video" playsinline muted></video>
       <div class="frame"></div>
     </div>
+    <button id="shutterBtn" style="margin-top: 8px; padding: 18px; font-size: 1.2rem;">読み取り</button>
+    <div id="shutterMsg" class="err"></div>
     <button id="stopBtn" style="margin-top: 8px; background: #6b7280;">カメラ停止</button>
   </div>
 
@@ -96,8 +98,12 @@ const errorEl = document.getElementById('error');
 
 let codeA = null;
 let codeB = null;
-let paused = false;   // 読み取り直後の待機中
 let stream = null;
+let scanning = false;   // 読み取りボタン押下後、検出を試みている間
+// ボタンを押してからこの時間内にQRが見つからなければ「見つかりません」
+const SCAN_TIMEOUT_MS = 1000;
+const shutterBtn = document.getElementById('shutterBtn');
+const shutterMsg = document.getElementById('shutterMsg');
 
 function mode() {
   return document.querySelector('input[name="mode"]:checked').value;
@@ -133,15 +139,11 @@ function showResult() {
 }
 
 function onCode(text) {
-  if (paused) return;
   if (codeA === null) {
     codeA = text;
     valA.textContent = text;
     beep(true);
-    // 同じQRをそのまま2つ目として読まないよう少し待つ
-    paused = true;
     stepText.textContent = '② 2つ目のQRコードを読み取ってください';
-    setTimeout(() => { paused = false; }, 1500);
   } else if (codeB === null) {
     codeB = text;
     valB.textContent = text;
@@ -149,19 +151,46 @@ function onCode(text) {
   }
 }
 
-function tick() {
-  if (!stream) return;
-  if (video.readyState === video.HAVE_ENOUGH_DATA && !paused) {
-    const scale = Math.min(1, 640 / video.videoWidth);
-    canvas.width = Math.floor(video.videoWidth * scale);
-    canvas.height = Math.floor(video.videoHeight * scale);
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
-    if (code && code.data) onCode(code.data);
-  }
-  requestAnimationFrame(tick);
+// 現在のカメラ映像からQRを1回解析（見つからなければ null）
+function decodeFrame() {
+  if (video.readyState !== video.HAVE_ENOUGH_DATA) return null;
+  const scale = Math.min(1, 640 / video.videoWidth);
+  canvas.width = Math.floor(video.videoWidth * scale);
+  canvas.height = Math.floor(video.videoHeight * scale);
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+  return code && code.data ? code.data : null;
 }
+
+// 読み取りボタン：押した直後の映像を数フレーム試し、最初に読めたものを採用
+function shutter() {
+  if (!stream || scanning) return;
+  scanning = true;
+  shutterBtn.disabled = true;
+  shutterBtn.textContent = '読み取り中…';
+  shutterMsg.textContent = '';
+  const start = performance.now();
+  const finish = () => {
+    scanning = false;
+    shutterBtn.disabled = false;
+    shutterBtn.textContent = '読み取り';
+  };
+  const attempt = () => {
+    if (!stream) { finish(); return; }
+    const text = decodeFrame();
+    if (text !== null) { finish(); onCode(text); return; }
+    if (performance.now() - start >= SCAN_TIMEOUT_MS) {
+      finish();
+      shutterMsg.textContent = 'QRコードが見つかりませんでした。枠に合わせてもう一度押してください。';
+      if (navigator.vibrate) navigator.vibrate(50);
+      return;
+    }
+    requestAnimationFrame(attempt);
+  };
+  attempt();
+}
+shutterBtn.addEventListener('click', shutter);
 
 async function startCamera() {
   errorEl.textContent = '';
@@ -171,7 +200,6 @@ async function startCamera() {
     });
     video.srcObject = stream;
     await video.play();
-    requestAnimationFrame(tick);
   } catch (e) {
     stream = null;
     errorEl.textContent = 'カメラを起動できませんでした（' + e.name + '）。HTTPSで開いているか、カメラの許可を確認してください。';
@@ -185,7 +213,7 @@ function stopCamera() {
 
 function reset() {
   codeA = codeB = null;
-  paused = false;
+  shutterMsg.textContent = '';
   valA.textContent = '';
   valB.textContent = '';
   resultEl.className = 'result';
