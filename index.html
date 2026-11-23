@@ -61,7 +61,9 @@
     <label><input type="radio" name="mode" value="exact"> 完全一致</label>
   </div>
 
-  <div id="scanArea">
+  <button id="startBtn" style="margin: 12px 0;">カメラを起動</button>
+
+  <div id="scanArea" style="display: none;">
     <div class="step" id="stepText">① 1つ目のQRコードを読み取ってください</div>
     <div class="viewer">
       <video id="video" playsinline muted></video>
@@ -77,7 +79,7 @@
   </div>
 
   <div id="error" class="err"></div>
-  <button id="resetBtn">最初からやり直す</button>
+  <button id="resetBtn" style="display: none;">最初からやり直す</button>
 </main>
 
 <script>
@@ -192,13 +194,19 @@ function reset() {
   startCamera();
 }
 
-document.getElementById('resetBtn').addEventListener('click', reset);
+const startBtn = document.getElementById('startBtn');
+const resetBtn = document.getElementById('resetBtn');
+
+startBtn.addEventListener('click', () => {
+  startBtn.style.display = 'none';
+  resetBtn.style.display = '';
+  reset();
+});
+resetBtn.addEventListener('click', reset);
 // 結果表示後にモードを切り替えたら再判定
 document.querySelectorAll('input[name="mode"]').forEach(r =>
   r.addEventListener('change', () => { if (codeA !== null && codeB !== null) showResult(); })
 );
-
-startCamera();
 </script>
 </body>
 </html>
