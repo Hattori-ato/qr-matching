@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>QR照合</title>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+<style>
+  :root {
+    --bg: #f4f5f7; --fg: #1d1f23; --muted: #6b7280; --card: #fff; --line: #d9dce1;
+    --ok: #15803d; --ng: #c62828; --accent: #2563eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121417; --fg: #eceef1; --muted: #9aa1ab; --card: #1d2025; --line: #343840; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: 520px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.2rem; margin: 4px 0 12px; }
+  .step { font-weight: 700; font-size: 1.1rem; margin-bottom: 8px; }
+  .viewer {
+    position: relative; width: 100%; aspect-ratio: 1 / 1; background: #000;
+    border-radius: 12px; overflow: hidden;
+  }
+  .viewer video { width: 100%; height: 100%; object-fit: cover; }
+  .viewer .frame {
+    position: absolute; inset: 18%; border: 3px solid rgba(255,255,255,.85); border-radius: 12px;
+    pointer-events: none;
+  }
+  .slots { display: grid; gap: 8px; margin: 12px 0; }
+  .slot {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+  }
+  .slot .label { font-size: .8rem; color: var(--muted); }
+  .slot .value { word-break: break-all; font-family: ui-monospace, Menlo, monospace; min-height: 1.4em; }
+  .result {
+    display: none; text-align: center; color: #fff; border-radius: 16px; padding: 28px 12px;
+    font-size: 4.5rem; font-weight: 800; letter-spacing: .05em; margin: 12px 0;
+  }
+  .result.ok { display: block; background: var(--ok); }
+  .result.ng { display: block; background: var(--ng); }
+  .result small { display: block; font-size: 1rem; font-weight: 500; letter-spacing: 0; }
+  button {
+    width: 100%; padding: 14px; font-size: 1.05rem; font-weight: 700; border: 0; border-radius: 10px;
+    background: var(--accent); color: #fff;
+  }
+  .mode { display: flex; gap: 16px; margin: 8px 0 4px; font-size: .95rem; }
+  .err { color: var(--ng); margin: 8px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>QRコード照合</h1>
+
+  <div class="mode">
+    <label><input type="radio" name="mode" value="contains" checked> 含む（部分一致）</label>
+    <label><input type="radio" name="mode" value="exact"> 完全一致</label>
+  </div>
+
+  <div id="scanArea">
+    <div class="step" id="stepText">① 1つ目のQRコードを読み取ってください</div>
+    <div class="viewer">
+      <video id="video" playsinline muted></video>
+      <div class="frame"></div>
+    </div>
+  </div>
+
+  <div id="result" class="result"></div>
+
+  <div class="slots">
+    <div class="slot"><div class="label">1つ目</div><div class="value" id="valA"></div></div>
+    <div class="slot"><div class="label">2つ目</div><div class="value" id="valB"></div></div>
+  </div>
+
+  <div id="error" class="err"></div>
+  <button id="resetBtn">最初からやり直す</button>
+</main>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.createElement('canvas');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
+const stepText = document.getElementById('stepText');
+const scanArea = document.getElementById('scanArea');
+const resultEl = document.getElementById('result');
+const valA = document.getElementById('valA');
+const valB = document.getElementById('valB');
+const errorEl = document.getElementById('error');
+
+let codeA = null;
+let codeB = null;
+let paused = false;   // 読み取り直後の待機中
+let stream = null;
+
+function mode() {
+  return document.querySelector('input[name="mode"]:checked').value;
+}
+
+// 比較：前後の空白・改行は無視
+function isMatch(a, b) {
+  const x = a.trim(), y = b.trim();
+  if (mode() === 'exact') return x === y;
+  return x.length > 0 && y.length > 0 && (x.includes(y) || y.includes(x));
+}
+
+function beep(ok) {
+  try {
+    if (navigator.vibrate) navigator.vibrate(ok ? 100 : [200, 100, 200]);
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    o.frequency.value = ok ? 1200 : 300;
+    g.gain.value = 0.15;
+    o.connect(g); g.connect(ac.destination);
+    o.start(); o.stop(ac.currentTime + (ok ? 0.15 : 0.4));
+  } catch (e) {}
+}
+
+function showResult() {
+  const ok = isMatch(codeA, codeB);
+  resultEl.className = 'result ' + (ok ? 'ok' : 'ng');
+  resultEl.innerHTML = (ok ? 'OK' : 'NG') + '<small>' + (ok ? '一致しました' : '一致しません') + '</small>';
+  scanArea.style.display = 'none';
+  beep(ok);
+  stopCamera();
+}
+
+function onCode(text) {
+  if (paused) return;
+  if (codeA === null) {
+    codeA = text;
+    valA.textContent = text;
+    beep(true);
+    // 同じQRをそのまま2つ目として読まないよう少し待つ
+    paused = true;
+    stepText.textContent = '② 2つ目のQRコードを読み取ってください';
+    setTimeout(() => { paused = false; }, 1500);
+  } else if (codeB === null) {
+    codeB = text;
+    valB.textContent = text;
+    showResult();
+  }
+}
+
+function tick() {
+  if (!stream) return;
+  if (video.readyState === video.HAVE_ENOUGH_DATA && !paused) {
+    const scale = Math.min(1, 640 / video.videoWidth);
+    canvas.width = Math.floor(video.videoWidth * scale);
+    canvas.height = Math.floor(video.videoHeight * scale);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+    if (code && code.data) onCode(code.data);
+  }
+  requestAnimationFrame(tick);
+}
+
+async function startCamera() {
+  errorEl.textContent = '';
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' }, audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    requestAnimationFrame(tick);
+  } catch (e) {
+    stream = null;
+    errorEl.textContent = 'カメラを起動できませんでした（' + e.name + '）。HTTPSで開いているか、カメラの許可を確認してください。';
+  }
+}
+
+function stopCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null;
+}
+
+function reset() {
+  codeA = codeB = null;
+  paused = false;
+  valA.textContent = '';
+  valB.textContent = '';
+  resultEl.className = 'result';
+  scanArea.style.display = '';
+  stepText.textContent = '① 1つ目のQRコードを読み取ってください';
+  stopCamera();
+  startCamera();
+}
+
+document.getElementById('resetBtn').addEventListener('click', reset);
+// 結果表示後にモードを切り替えたら再判定
+document.querySelectorAll('input[name="mode"]').forEach(r =>
+  r.addEventListener('change', () => { if (codeA !== null && codeB !== null) showResult(); })
+);
+
+startCamera();
+</script>
+</body>
+</html>
