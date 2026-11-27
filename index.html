@@ -125,22 +125,22 @@ function typeLabel(q) {
 // 判定結果 { status: 'ok' | 'ng' | 'error', reason }
 function judge(a, b) {
   if (a.type === 'A' && b.type === 'A') {
-    return { status: 'error', reason: 'どちらもパターンA（GIDあり）です。1枚はパターンBを読み取ってください。' };
+    return { status: 'error', reason: 'どちらも納品ラベル（グループIDあり）です。1枚は納品リスト・ピック札を読み取ってください。' };
   }
   if (a.type === 'B' && b.type === 'B') {
     // パターンB同士：SIDが一致していればOK
     const same = a.sids.length === b.sids.length && a.sids.every(s => b.sids.includes(s));
     return same
-      ? { status: 'ok', reason: 'SIDが一致しました' }
-      : { status: 'ng', reason: 'SIDが一致しません' };
+      ? { status: 'ok', reason: '商品IDが一致しました' }
+      : { status: 'ng', reason: '商品IDが一致しません' };
   }
   // パターンAとパターンB：BのSIDがAのSIDに含まれていればOK
   const qa = a.type === 'A' ? a : b;
   const qb = a.type === 'B' ? a : b;
   const missing = qb.sids.filter(s => !qa.sids.includes(s));
   return missing.length === 0
-    ? { status: 'ok', reason: 'パターンBのSIDがパターンAに含まれています' }
-    : { status: 'ng', reason: 'SID ' + missing.join(',') + ' がパターンAに含まれていません' };
+    ? { status: 'ok', reason: '商品IDが納品ラベル（グループIDあり）に含まれています' }
+    : { status: 'ng', reason: '商品ID ' + missing.join(',') + ' が納品ラベル（グループIDあり）に含まれていません' };
 }
 
 function beep(ok) {
